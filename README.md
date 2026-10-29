@@ -47,7 +47,8 @@ FastAPI app (container)
 
 ## 4. Why these choices
 
-- **FastAPI, not Express.** The model is a Python file, so a Python backend can load it directly. Express is a Node framework and would need a second Python service or a model conversion.
+- **Monolith.** One FastAPI service serves the API, the model and the React build. It is the simplest option for one model and one server, and it is easy to deploy and debug.
+- **Iterative development.** Work runs in thin slices, and each slice ends with something that runs or is deployed. Waterfall was not chosen because the model and UI may change after results come in.
 - **React with Vite.** The team knows React from MERN work. Vite produces plain static files, which can move to S3 and CloudFront later. A plain HTML page with Tailwind is the fallback if time runs short.
 - **EC2 with Docker Compose, not Lambda, for now.** One server is easier to debug while the team learns AWS. Lambda is the upgrade path.
 - **GHCR, not ECR, for now.** GitHub Actions can push there without AWS keys. ECR is used after the Lambda move.
@@ -89,3 +90,16 @@ requirements.txt
 - Exact scikit-learn and Python versions. Confirm from notebook 03.
 - AWS account source: AWS free plan credits or a course account. Ask the TA first.
 - Whether `pandas` is needed in the request path.
+
+## 9. Fallback and backup plan
+
+- **Fallback if EC2 cannot be paid for:** AWS Lambda, running the same Docker image through Lambda Web Adapter, API Gateway, ECR, S3 and CloudFront. It costs less at low traffic, and AWS's always-free allowance may cover a demo. The first request after a quiet period is slower, because the model loads again. Test a Lambda deploy of the same image while the free credits last, so the fallback is proven before it is needed.
+- **Backup server (school server, ml_brain lab),** if the lab confirms all of the following:
+  - it is reachable from the internet on ports 80 and 443
+  - Docker can be installed, with root or sudo access
+  - hosting a public web app is allowed
+  - it stays up through the demo
+  - it has enough CPU, memory and uptime for the app
+
+  The same image and DuckDNS subdomain work there too.
+
