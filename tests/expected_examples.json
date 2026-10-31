@@ -1,0 +1,128 @@
+[
+  {
+    "name": "TX slab home, no water inside (0 in)",
+    "form": {
+      "state": "TX",
+      "flood_zone": "A",
+      "year_built": 1985,
+      "floors": "1",
+      "foundation": "slab",
+      "basement": "none",
+      "elevated": false,
+      "primary_residence": true,
+      "coverage_building": 250000,
+      "deductible_building": 1250,
+      "water_depth_inches": 0
+    },
+    "expected": {
+      "low": 2100.0,
+      "middle": 23600.0,
+      "high": 84300.0
+    }
+  },
+  {
+    "name": "TX slab home, 1 foot of water",
+    "form": {
+      "state": "TX",
+      "flood_zone": "A",
+      "year_built": 1985,
+      "floors": "1",
+      "foundation": "slab",
+      "basement": "none",
+      "elevated": false,
+      "primary_residence": true,
+      "coverage_building": 250000,
+      "deductible_building": 1250,
+      "water_depth_inches": 12
+    },
+    "expected": {
+      "low": 38600.0,
+      "middle": 88500.0,
+      "high": 138600.0
+    }
+  },
+  {
+    "name": "TX slab home, 2 feet of water",
+    "form": {
+      "state": "TX",
+      "flood_zone": "A",
+      "year_built": 1985,
+      "floors": "1",
+      "foundation": "slab",
+      "basement": "none",
+      "elevated": false,
+      "primary_residence": true,
+      "coverage_building": 250000,
+      "deductible_building": 1250,
+      "water_depth_inches": 24
+    },
+    "expected": {
+      "low": 44800.0,
+      "middle": 100500.0,
+      "high": 160400.0
+    }
+  },
+  {
+    "name": "TX slab home, depth not known",
+    "form": {
+      "state": "TX",
+      "flood_zone": "A",
+      "year_built": 1985,
+      "floors": "1",
+      "foundation": "slab",
+      "basement": "none",
+      "elevated": false,
+      "primary_residence": true,
+      "coverage_building": 250000,
+      "deductible_building": 1250,
+      "water_depth_inches": null
+    },
+    "expected": {
+      "low": 4700.0,
+      "middle": 46500.0,
+      "high": 107100.0
+    }
+  },
+  {
+    "name": "NJ two-storey home with finished basement, 8 in, $150k coverage",
+    "form": {
+      "state": "NJ",
+      "flood_zone": "A",
+      "year_built": 1955,
+      "floors": "2",
+      "foundation": "basement",
+      "basement": "finished_basement",
+      "elevated": false,
+      "primary_residence": true,
+      "coverage_building": 150000,
+      "deductible_building": 2000,
+      "water_depth_inches": 8
+    },
+    "expected": {
+      "low": 5100.0,
+      "middle": 10900.0,
+      "high": 35600.0
+    }
+  },
+  {
+    "name": "FL raised home in a V zone, 6 in, secondary home",
+    "form": {
+      "state": "FL",
+      "flood_zone": "V",
+      "year_built": 2005,
+      "floors": "2",
+      "foundation": "elevated_open",
+      "basement": "none",
+      "elevated": true,
+      "primary_residence": false,
+      "coverage_building": 250000,
+      "deductible_building": 5000,
+      "water_depth_inches": 6
+    },
+    "expected": {
+      "low": 500.0,
+      "middle": 5400.0,
+      "high": 35600.0
+    }
+  }
+]

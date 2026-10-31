@@ -1,0 +1,32 @@
+# Runs the model service and Caddy together.
+#   On your computer:  docker compose up --build        then open http://localhost
+#   On the AWS server: set DOMAIN in .env, then  docker compose up -d --build
+name: flood-payout
+
+services:
+  app:
+    build: .
+    image: flood-payout:2.0.0
+    restart: unless-stopped
+    expose:
+      - "8000"                 # reachable from Caddy on the compose network only, not from the internet
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy   # uses the HEALTHCHECK in the Dockerfile
+    environment:
+      DOMAIN: ${DOMAIN:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data           # certificates live here; keep this volume across deploys
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

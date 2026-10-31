@@ -1,0 +1,12 @@
+# Pinned to the versions the model bundle was built and tested with (scikit-learn, numpy, pandas, scipy, joblib)
+# and to the versions the service was tested with.
+scikit-learn==1.9.1
+numpy==2.5.3
+pandas==3.0.5
+scipy==1.18.1
+joblib==1.6.0
+fastapi==0.162.0
+starlette==1.7.0
+pydantic==2.14.2
+slowapi==0.1.10
+uvicorn==0.54.0

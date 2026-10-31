@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Secrets and local settings (.env.example is committed)
+.env
+
+# A retrained candidate bundle is reviewed before it replaces models/flood_payout_v2.joblib
+models/flood_payout_candidate.joblib
+
+# Frontend
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+.ruff_cache/

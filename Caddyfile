@@ -1,0 +1,12 @@
+# Caddy: HTTPS in front of the app container. The site address comes from DOMAIN (see .env.example).
+{$DOMAIN} {
+	encode zstd gzip
+	header {
+		X-Content-Type-Options nosniff
+		-Server
+	}
+	request_body {
+		max_size 64KB
+	}
+	reverse_proxy app:8000
+}

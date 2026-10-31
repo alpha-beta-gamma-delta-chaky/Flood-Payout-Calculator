@@ -1,0 +1,12 @@
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+extend-exclude = ["frontend"]
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E741"]   # single-letter names (l, h) in the evaluation maths
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
