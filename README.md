@@ -101,7 +101,7 @@ Seams for later. The service stays one unit for now. These are the places where 
 
 Each step ends with all tests passing.
 
-1. Move the API tests that are kept outside the repository for now (`test_api.py`) into `tests/`, so HTTP behaviour is locked before anything moves.
+1. Done on 7 November 2026: the API tests are in `tests/test_api.py`, so HTTP behaviour is locked before anything moves.
 2. Add `app/config.py` and read all settings from it.
 3. Add `app/service.py`. Move the estimate logic and counters out of `main.py`, so the routes only translate HTTP.
 4. Load the model at start and keep it on `app.state`, so tests can use a fake model.
@@ -117,7 +117,7 @@ Each step ends with all tests passing.
 | Rate limiting | slowapi | Per-IP limit on `/api/estimate` (default 30 per minute, set with `RATE_LIMIT`) | Uses the `X-Forwarded-For` header that Caddy sets |
 | Frontend | React, Vite, Tailwind CSS | Input form, result page with range bar, "How it works" page | Vite builds static files. The range bar is custom, so no chart library is needed |
 | Design reference | Figma | Screen layouts, colours and type (Inter) | Design tool only. Not part of the running app |
-| Testing (backend) | pytest, httpx, ruff | Ahmad's 11 tests (leakage guard, input validation, answer checks, regression on six example houses), lint. API-layer tests (HTTP, rate limit) are to be added before deploy | Runs on pull requests |
+| Testing (backend) | pytest, httpx, ruff | Ahmad's 11 tests (leakage guard, input validation, answer checks, regression on six example houses), 47 API test cases (status codes, rate limit, response fields, allowed ranges, serving the page, model version), lint | Runs on pull requests |
 | Testing (frontend) | Vitest, React Testing Library | Form validation and the form-to-result flow | Runs on pull requests |
 | Packaging | Docker (multi-stage build), Docker Compose | One image per model version. Stage 1 builds the React app; stage 2 is the Python runtime | Compose runs the app and Caddy together |
 | Reverse proxy | Caddy | HTTPS, with certificates issued and renewed automatically | HTTP only until a domain points at the server |
@@ -146,7 +146,7 @@ src/flood_payout/     shared model code: bundle.py (validation, prediction), fea
                       leakage rules), final_config.py, models.py, evaluation.py
 models/               flood_payout_v2.joblib (model bundle) and MODEL_CARD.md
 frontend/             React + Vite + Tailwind source (npm run build writes frontend/dist)
-tests/                pytest: leakage guard, validation, answers, regression on example houses
+tests/                pytest: service tests (leakage guard, validation, answers, regression) and API tests (HTTP)
 retrain.py            seasonal retraining; promotes a new bundle only if it is not worse
 requirements.txt      pinned Python packages (production)
 requirements-dev.txt  adds pytest, httpx, ruff
@@ -181,7 +181,7 @@ Caddyfile             HTTPS and reverse proxy
 
 ## 9. Fallback and backup plan
 
-- **Fallback if EC2 cannot be paid for:** AWS Lambda, running the same Docker image through Lambda Web Adapter, API Gateway, ECR, S3 and CloudFront. It costs less at low traffic, and AWS's always-free allowance may cover a demo. The first request after a quiet period is slower, because the model loads again. Test a Lambda deploy of the same image while the free credits last, so the fallback is proven before it is needed.
+- **Fallback if EC2 cannot be paid for:** AWS Lambda, running the same Docker image through Lambda Web Adapter, API Gateway, ECR, S3 and CloudFront. It costs less at low traffic, and AWS's always-free allowance may cover a demo. The first request after a quiet period is slower, because the model loads again. This is described for the report only, to show the option was considered. We will not build or test it.
 - **Free-host fallback: Render, with Vercel for the page as an option.** Render runs the same Docker image as a web service. It provides HTTPS itself, so Caddy is not needed there. Make sure Render uses port 8000, the port the Dockerfile exposes.
   - Limits of Render's free web service (from Render's documentation): 512 MB of RAM and 0.1 CPU; it sleeps after 15 minutes without traffic and takes about a minute to wake; 750 free instance hours per month; no persistent disk (the app needs none). Render's documentation says not to use free services for production applications, so this is a fallback for the demo, not the main plan.
   - Memory fits. On 7 November 2026, under Docker on a Mac, the app container used about 158 MiB after several estimates (Caddy used about 64 MiB more, which Render does not need). Still to check on Render itself: how long start-up and the first answer take on 0.1 CPU.
@@ -226,7 +226,7 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
 ```
 
-**2. Check the back end.** Expect `All checks passed!` and `11 passed`.
+**2. Check the back end.** Expect `All checks passed!` and `58 passed`.
 
 ```
 ruff check .
@@ -298,7 +298,7 @@ The claims data is not in this repository. `retrain.py` needs it as input (`--ta
 
 ## 11. Tests
 
-There are 26 automated tests: 11 for the service and 15 for the web page. GitHub Actions runs all of them on every pull request and every push to `main`. To run them yourself, follow the steps in section 10: `pytest` for the service and `cd frontend && npm test` for the page.
+There are 73 automated test cases: 58 for the service (11 service tests and 47 API cases) and 15 for the web page. GitHub Actions runs all of them on every pull request and every push to `main`. To run them yourself, follow the steps in section 10: `pytest` for the service and `cd frontend && npm test` for the page.
 
 ### Service tests (11, `tests/test_service.py`)
 
@@ -315,6 +315,21 @@ There are 26 automated tests: 11 for the service and 15 for the web page. GitHub
 | Answers | `test_deeper_water_raises_middle_guess` | The middle guess for 36 inches of water is higher than for 0 inches. |
 | Answers | `test_batch_equals_single` | Estimating several houses at once gives the same answers as one at a time. |
 | Regression | `test_example_houses_unchanged` | The six example houses in `tests/expected_examples.json` still return the same low, middle and high (within 2%, at least $200), so a model change cannot shift answers unnoticed. |
+
+### API tests (47 cases, `tests/test_api.py`)
+
+These send real HTTP requests to the service in memory, so they cover what the web page, the deploy smoke test and the daily health check depend on.
+
+| Group | Cases | What it checks |
+|---|---|---|
+| Health and docs | 4 | `/health` answers `ok` with the model version, reports `model_version`, `trained_on` and `sklearn_version`, and is not rate limited (the deploy smoke test calls it). `/docs` opens. |
+| Answers | 8 | A valid house returns 200 with low <= middle <= high <= coverage limit, band shares that add up to 1 and a chance of $0 between 0 and 1. The six example houses give their recorded answers over HTTP. The response has exactly the documented fields. |
+| Optional answers | 4 | Leaving depth out, or sending it as null, uses the no-depth model. The four required answers alone are enough. "Not sure" answers (`unknown`) are accepted. |
+| Allowed ranges and bad values | 19 | The edges (coverage $1,000 and $250,000, deductible $0 and $50,000, depth 0 and 240 inches) are accepted. One step outside each edge, and a future year built, give 422. Bad coverage, depth, floors, year built, elevated and flood zone values give 422. |
+| Refused requests | 7 | Adjuster-only fields (`post_damage_building`, `paid_building`), `state` and `id` give 422. A missing required answer gives 422 and names the field. An empty or non-JSON body gives 422. A wrong method gives 405 and an unknown route 404. |
+| Rate limit | 2 | A limit of 3 per minute gives 200, 200, 200, 429, 429. The 429 answer carries `Retry-After: 60` and `"error": "rate limit"`, which the page uses. |
+| Serving the page | 2 | A built page is served at `/` while API routes still win. Without a build, `/` points to `/docs`. |
+| Model version | 1 | The installed scikit-learn version equals the one that saved the model file. |
 
 ### Web page tests (15, `frontend/src/`)
 
@@ -338,4 +353,4 @@ There are 26 automated tests: 11 for the service and 15 for the web page. GitHub
 
 ### Not tested yet
 
-HTTP behaviour of the service (status codes, the request limit, serving the page) and the Docker and Caddy setup are not covered. API tests for these are written and kept outside the repository for now. They move into `tests/` before the first deployment.
+The Docker and Caddy setup has no automated test. It was run by hand on 7 November 2026: the page loaded through Caddy and the example house matched. The deploy workflow will add a smoke test against the server.
