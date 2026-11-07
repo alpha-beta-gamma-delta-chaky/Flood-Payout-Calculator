@@ -1,7 +1,7 @@
 # Tech Stack: Flood Payout Calculator
 
-Last updated: 7 November 2026
-Status: the local MVP runs (FastAPI service and React page), including under Docker Compose with Caddy. The AWS deployment and the deploy workflow are not built yet. To run the MVP on your computer, go to section 10.
+Last updated: 8 November 2026
+Status: the app is live at https://flood-payout-alpha.duckdns.org on an AWS server in Sydney, deployed with the workflows in section 12. The daily health check and the CloudWatch alarm are not set up yet. To run the app on your computer, go to section 10.
 
 ## 1. Summary
 
@@ -122,11 +122,11 @@ Each step ends with all tests passing.
 | Packaging | Docker (multi-stage build), Docker Compose | One image per model version. Stage 1 builds the React app; stage 2 is the Python runtime | Compose runs the app and Caddy together |
 | Reverse proxy | Caddy | HTTPS, with certificates issued and renewed automatically | HTTP only until a domain points at the server |
 | Hosting | AWS EC2, t3.small, Ubuntu LTS, Elastic IP, region ap-southeast-2 (Sydney) | Runs the containers | The new AWS free-plan account covers the prototype: the $100 credit arrived on 7 November 2026. The free plan fixes the region to Sydney (section 8) |
-| Registry | GitHub Container Registry (GHCR) | Stores tagged images | No extra AWS account or keys needed to push |
+| Registry | GitHub Container Registry (GHCR) | Stores the images: `sha-xxxxxxx` for each build (never changes) and `main` for the newest | No extra AWS account or keys needed to push |
 | Source control | GitHub (private repository) | Code, pull requests, workflows | Keep the repository private |
-| CI | GitHub Actions on GitHub-hosted runners | Checks on every pull request | Lint, tests, leakage check, regression check, build without push |
-| CD | GitHub Actions with a self-hosted runner on the EC2 server | Deploys when someone starts the deploy workflow by hand from `main` | Smoke test; the last good tag is restored automatically on failure. Manual rollback workflow. (Approval gates on environments are not available on private repositories on the free plan) |
-| Monitoring | Daily health check from GitHub Actions, CloudWatch CPU alarm, AWS Budgets alert and billing alarm | Detects outages and unexpected cost | Set up before the first deploy |
+| CI | GitHub Actions on GitHub-hosted runners | Checks on every pull request and every push to `main`. On `main`, after the checks pass, it also builds and publishes the image | Lint, tests, build without push. Publish: build the x86 image, start the container, run the smoke test, push to GHCR |
+| CD | GitHub Actions with a self-hosted runner on the EC2 server | Deploys when someone starts the deploy workflow by hand from `main` | `scripts/deploy.sh` smoke-tests the public address and goes back to the last good tag if the test fails. Rolling back by hand means running the same workflow with an older tag. (Approval gates on environments are not available on private repositories on the free plan) |
+| Monitoring | AWS Budgets alert; planned: daily health check from GitHub Actions and a CloudWatch CPU alarm | Detects outages and unexpected cost | The budget alert is set. The health check and the alarm are not set up yet |
 | Upgrade path (later) | AWS Lambda with Lambda Web Adapter, API Gateway, ECR, S3 and CloudFront, GitHub OIDC | Serverless hosting when the server is idle or traffic is spiky | Same Docker image; not started in this phase |
 
 ## 4. Why these choices
@@ -153,10 +153,12 @@ requirements-dev.txt  adds pytest, httpx, ruff
 pyproject.toml        ruff and pytest settings
 Dockerfile            multi-stage: builds the React app, then the Python runtime image
 docker-compose.yml    app + Caddy together
+docker-compose.prod.yml  server version: pulls the image from GHCR instead of building it
 Caddyfile             HTTPS and reverse proxy
 .env.example          DOMAIN setting (copy to .env)
 .python-version       Python 3.13 (Node 22 is in frontend/.nvmrc)
-.github/workflows/    ci.yml (pull request checks); deploy workflow comes later
+scripts/              smoke_test.py (checks a running service), deploy.sh (deploy and rollback, runs on the server)
+.github/workflows/    ci.yml (checks on pull requests; on main also builds and pushes the image), deploy.yml (manual deploy)
 ```
 
 ## 6. Version pinning
@@ -168,7 +170,7 @@ Caddyfile             HTTPS and reverse proxy
 
 ## 7. Out of scope for the prototype
 
-- Domain name (added later; Caddy then issues HTTPS).
+- A custom domain. The app uses a free DuckDNS name, and Caddy issues the HTTPS certificate for it.
 - User accounts, login and saved estimates.
 - Database. The application stores no personal data.
 - Retraining pipeline (planned for once per flood season, as a separate workflow).
@@ -176,7 +178,7 @@ Caddyfile             HTTPS and reverse proxy
 ## 8. Open decisions
 
 - **AWS account (done):** the TA confirmed the course provides no AWS account, so we opened a new account on the free plan. The $100 sign-up credit arrived on 7 November 2026, and setting a budget earned a further $20. The free plan lasts 6 months or until the credits run out. A new account's default project is pinned to one region based on the contact address, and ours is Asia Pacific (Sydney), `ap-southeast-2`. Using Singapore would need an upgrade to the paid plan and advanced features, which risks real charges, so we stay in Sydney. The extra distance does not matter for a demo.
-- **Backup host if AWS does not work out (open):** Render, with Vercel for the page as an option. Both have free plans and the team already knows them (details in section 9). DigitalOcean or Azure also stay possible: DigitalOcean's GitHub Student Pack credit ended on 31 July 2026, so a 2 GiB Droplet would cost about $12 per month unless a new-user offer applies, and for Azure we would check what the current Azure for Students offer gives with a school email. Decide only if the AWS credit does not arrive.
+- **Backup host if AWS does not work out (open):** Render, with Vercel for the page as an option. Both have free plans and the team already knows them (details in section 9). DigitalOcean or Azure also stay possible: DigitalOcean's GitHub Student Pack credit ended on 31 July 2026, so a 2 GiB Droplet would cost about $12 per month unless a new-user offer applies, and for Azure we would check what the current Azure for Students offer gives with a school email. Not needed so far: the credit arrived and the AWS server is running.
 - Settled for the MVP: FastAPI with Pydantic, React with Vite, scikit-learn 1.9.1 and Python 3.13 (the versions the model was built with), and `pandas` in the request path.
 
 ## 9. Fallback and backup plan
@@ -353,4 +355,63 @@ These send real HTTP requests to the service in memory, so they cover what the w
 
 ### Not tested yet
 
-The Docker and Caddy setup has no automated test. It was run by hand on 7 November 2026: the page loaded through Caddy and the example house matched. The deploy workflow will add a smoke test against the server.
+The Docker and Caddy setup has no automated test of its own. It was run by hand on 7 November 2026: the page loaded through Caddy and the example house matched. Since the first deploy, `scripts/smoke_test.py` checks the live service after every deploy, and the `publish` job runs it against the container before the image is pushed. Still to do: the rollback path in `scripts/deploy.sh` was checked only with a stand-in for Docker, not on the real server, and the server has not been rebooted to confirm that the app and the deploy runner come back by themselves.
+
+## 12. Deploy to AWS
+
+The app is live at https://flood-payout-alpha.duckdns.org. A change reaches the server in two steps: GitHub builds the image by itself, and a person starts the deploy by hand.
+
+### How a change reaches the server
+
+```mermaid
+flowchart LR
+    P([Merge to main]) --> C[ci.yml: backend, frontend, docker checks]
+    C --> B[publish job: build x86 image, start it, run smoke test]
+    B --> R[(GHCR: sha-xxxxxxx and main)]
+    R --> D[Someone runs deploy by hand]
+    D --> S[Server: pull, start, smoke test the public address]
+    S -->|passes| OK([Live: tag saved as last good])
+    S -->|fails| RB([Back to the last good tag, job shows red])
+```
+
+1. **Merge to `main`.** `ci.yml` runs the backend, frontend and docker jobs. If they pass, the `publish` job builds the image on a GitHub x86 runner (the same CPU type as the server), starts it, runs `scripts/smoke_test.py` against it, and pushes it to GHCR as `sha-xxxxxxx` (this tag never changes) and `main` (always the newest build).
+2. **Start the deploy.** On GitHub: Actions, then `deploy`, then Run workflow, branch `main`. Leave Tag empty for the newest build, or enter a tag such as `sha-1a2b3c4` for an older one. The job runs on the self-hosted runner on the server, and only starts from `main`.
+3. **`scripts/deploy.sh` does the work.** It finds the exact build behind the tag, copies `docker-compose.prod.yml` and the Caddyfile to `~/flood-payout`, writes `IMAGE_TAG` to `.env`, pulls the image and starts it. It waits for the container's health check, reloads Caddy, then smoke-tests the public address. The test retries for up to 2 minutes, which gives the first HTTPS certificate time to arrive.
+4. **Pass or fail.** On a pass, the tag is saved as the last good one. On a failure, the log shows the container logs, the script starts the last good tag again, and the job shows red so someone notices. The very first deploy has no earlier tag, so nothing can be rolled back then.
+
+An update replaces the app container, so the site is unavailable for a few seconds while the new one starts (Caddy answers with an error until then).
+
+### The server
+
+| Item | Value |
+|---|---|
+| Cloud | AWS, region ap-southeast-2 (Sydney) |
+| Instance | `flood-payout`, t3.small, Ubuntu 24.04 LTS (x86), 20 GiB disk |
+| Address | Elastic IP 52.62.228.131 and the name `flood-payout-alpha.duckdns.org` (DuckDNS) |
+| Firewall (security group `launch-wizard-1`) | Ports 80 and 443 from anywhere. SSH (port 22) from one admin IPv4 address only; edit that rule when the address changes, and delete it when SSH is not needed |
+| Software | Docker 29.9.3 and Docker Compose v5.7.0 |
+| Deploy runner | GitHub self-hosted runner `flood-payout-ec2` in `~/actions-runner`, installed as a system service. Labels: `self-hosted`, `Linux`, `X64`, `prod` |
+| App folder | `~/flood-payout` holds `docker-compose.yml`, `Caddyfile`, `.env` (`DOMAIN` and `IMAGE_TAG`) and `.last_good_tag` |
+| Login key | Key pair `flood-payout-key`. The private file is kept by one team member and never goes in the repository |
+
+### Everyday commands
+
+| Task | How |
+|---|---|
+| Check the live site | `python3 scripts/smoke_test.py https://flood-payout-alpha.duckdns.org` from any computer with Python 3 |
+| Go back to an older build | Run the `deploy` workflow with an older tag. The tags are listed on GitHub under the repository's Packages |
+| Read the logs | Log in with `ssh -i <key file> ubuntu@52.62.228.131`, then `cd ~/flood-payout && docker compose ps && docker compose logs --tail 100 app caddy` |
+| Save credit between work sessions | EC2 console, Instance state, Stop (never Terminate, which deletes the server). The Elastic IP keeps the address. The containers are set to restart by themselves; this is not tested yet (section 11) |
+
+### Cost
+
+About $25 per month, paid from the AWS free-plan credit: the t3.small server about $19, the public IPv4 address about $3.65 and the disk about $2. A stopped server still costs the address and the disk, about $5.50 per month.
+
+### Setting up a new server (done once, 7 to 8 November 2026)
+
+1. Launch an Ubuntu 24.04 x86 EC2 instance (t3.small, 20 GiB) and attach an Elastic IP.
+2. In the security group, open ports 80 and 443 to everyone and SSH to one admin address.
+3. Point a DuckDNS name at the Elastic IP.
+4. Log in over SSH, update the system and install Docker (Docker's own apt repository).
+5. In GitHub, add a self-hosted runner for the repository with the label `prod`, and install it as a service (`sudo ./svc.sh install`, then `start`).
+6. Create `~/flood-payout/.env` containing `DOMAIN=<the DuckDNS name>`. The first deploy does the rest.
