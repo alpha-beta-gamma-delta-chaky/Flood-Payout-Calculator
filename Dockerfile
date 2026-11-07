@@ -25,11 +25,16 @@ COPY app/ app/
 COPY models/ models/
 COPY --from=web /web/dist/ static/
 
-# Fail the build if the model file does not load with these library versions.
-RUN python -c "from app import model; print('model loads:', model.info())"
+# Files copied from some computers keep owner-only permissions (for example 600). The app runs as a
+# non-root user, so make everything under /srv readable.
+RUN chmod -R a+rX /srv
 
 RUN useradd --create-home appuser
 USER appuser
+
+# Fail the build if the model file does not load with these library versions. This runs as the same
+# non-root user as the service, so a permission problem fails the build instead of the start-up.
+RUN python -c "from app import model; print('model loads:', model.info())"
 EXPOSE 8000
 HEALTHCHECK CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 # --proxy-headers: the client IP (for the rate limit) comes from Caddy's X-Forwarded-For header. This is safe

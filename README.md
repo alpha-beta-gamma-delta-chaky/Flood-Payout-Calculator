@@ -1,7 +1,7 @@
 # Tech Stack: Flood Payout Calculator
 
 Last updated: 7 November 2026
-Status: the local MVP runs (FastAPI service and React page). The AWS deployment and the deploy workflow are not built yet.
+Status: the local MVP runs (FastAPI service and React page), including under Docker Compose with Caddy. The AWS deployment and the deploy workflow are not built yet. To run the MVP on your computer, go to section 10.
 
 ## 1. Summary
 
@@ -95,7 +95,7 @@ Seams for later. The service stays one unit for now. These are the places where 
 
 - **Rate limit.** It counts requests in memory, so the container runs one worker (`--workers 1`). More workers or servers need a shared store, or the limit moves to the gateway.
 - **Model release.** The model file ships inside the image, so a retrain means a rebuild and a redeploy. `MODEL_PATH` already allows loading it from elsewhere (a volume or S3). That would let us retrain without rebuilding.
-- **The page.** Vite builds static files, so the page could move to S3 and CloudFront. The cost is CORS settings, a second deploy and a chance of page and API being on different versions.
+- **The page.** Vite builds static files, so the page could move to S3 and CloudFront (or Vercel). The cost is CORS settings, a second deploy and a chance of page and API being on different versions.
 
 ### Plan for the final
 
@@ -176,12 +176,17 @@ Caddyfile             HTTPS and reverse proxy
 ## 8. Open decisions
 
 - **AWS account (next step):** the TA confirmed the course provides no AWS account. Open a new AWS account on the free plan and check that the $100 sign-up credit arrives. Accounts created on or after 15 July 2025 get that credit, plus up to $100 more for trying services, for 6 months or until it is used up, and `t3.small` is eligible. Pick region `ap-southeast-1` (Singapore) and set a budget alert before launching anything.
-- **Backup host if AWS does not work out (open):** DigitalOcean or Azure. DigitalOcean's GitHub Student Pack credit ended on 31 July 2026, so a 2 GiB Droplet would cost about $12 per month unless a new-user offer applies. For Azure, check what the current Azure for Students offer gives with a school email. Decide only if the AWS credit does not arrive.
+- **Backup host if AWS does not work out (open):** Render, with Vercel for the page as an option. Both have free plans and the team already knows them (details in section 9). DigitalOcean or Azure also stay possible: DigitalOcean's GitHub Student Pack credit ended on 31 July 2026, so a 2 GiB Droplet would cost about $12 per month unless a new-user offer applies, and for Azure we would check what the current Azure for Students offer gives with a school email. Decide only if the AWS credit does not arrive.
 - Settled for the MVP: FastAPI with Pydantic, React with Vite, scikit-learn 1.9.1 and Python 3.13 (the versions the model was built with), and `pandas` in the request path.
 
 ## 9. Fallback and backup plan
 
 - **Fallback if EC2 cannot be paid for:** AWS Lambda, running the same Docker image through Lambda Web Adapter, API Gateway, ECR, S3 and CloudFront. It costs less at low traffic, and AWS's always-free allowance may cover a demo. The first request after a quiet period is slower, because the model loads again. Test a Lambda deploy of the same image while the free credits last, so the fallback is proven before it is needed.
+- **Free-host fallback: Render, with Vercel for the page as an option.** Render runs the same Docker image as a web service. It provides HTTPS itself, so Caddy is not needed there. Make sure Render uses port 8000, the port the Dockerfile exposes.
+  - Limits of Render's free web service (from Render's documentation): 512 MB of RAM and 0.1 CPU; it sleeps after 15 minutes without traffic and takes about a minute to wake; 750 free instance hours per month; no persistent disk (the app needs none). Render's documentation says not to use free services for production applications, so this is a fallback for the demo, not the main plan.
+  - Memory fits. On 7 November 2026, under Docker on a Mac, the app container used about 158 MiB after several estimates (Caddy used about 64 MiB more, which Render does not need). Still to check on Render itself: how long start-up and the first answer take on 0.1 CPU.
+  - Vercel's Hobby plan is free for personal, non-commercial use only, which fits a course project. It would host the built page, with a `vercel.json` rewrite sending `/api/*` to the Render address. The page then opens instantly, and only the first estimate waits while Render wakes. The cost is a second deploy and one more setting to test.
+  - Use Render alone first, because it has the fewest parts. Add Vercel only if the wake-up delay is a problem. Before a demo, open the page a few minutes early so the service is awake.
 - **Backup server (school server, ml_brain lab),** if the lab confirms all of the following:
   - it is reachable from the internet on ports 80 and 443
   - Docker can be installed, with root or sudo access
