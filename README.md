@@ -1,6 +1,6 @@
 # Tech Stack: Flood Payout Calculator
 
-Last updated: 1 November 2026
+Last updated: 7 November 2026
 Status: the local MVP runs (FastAPI service and React page). The AWS deployment and the deploy workflow are not built yet.
 
 ## 1. Summary
@@ -9,19 +9,103 @@ The calculator is one web application. A Python backend loads the trained model 
 
 ## 2. Architecture
 
+The calculator is a **layered monolith**. "Monolith" describes how it is deployed: one service, one process, one Docker image. "Layered" describes how the code inside is organised: layers that depend on each other in one direction only, so each kind of bug has one place to look.
+
+### Runtime view
+
+```mermaid
+flowchart LR
+    B["<b>Browser</b><br/>React page"]
+    subgraph EC2["AWS EC2 t3.small, Docker Compose"]
+        C["<b>Caddy container</b><br/>HTTPS, reverse proxy"]
+        subgraph APP["App container (one Docker image)"]
+            R["<b>React build</b><br/>static files served at /"]
+            F["<b>FastAPI service</b><br/>routes, checks, rate limit"]
+            M["<b>Model bundle</b><br/>joblib, loaded at start"]
+        end
+    end
+    B -->|HTTPS| C
+    C -->|"app:8000"| F
+    F --> R
+    F --> M
+    classDef infra fill:#F1EFE8,stroke:#5F5E5A,color:#2C2C2A
+    classDef ours fill:#E1F5EE,stroke:#0F6E56,color:#04342C
+    class B,C infra
+    class R,F,M ours
+    style EC2 fill:none,stroke:#888780,stroke-dasharray:5 4
+    style APP fill:none,stroke:#0F6E56
 ```
-Browser
-   |  HTTPS (Caddy; HTTP only until a domain is set up)
-   v
-Caddy (container)
-   |
-   v
-FastAPI app (container)
-   |- /                 React web page (static build)
-   |- /api/estimate     JSON estimate from the model
-   |- /health           health check
-   |- loads model bundle (joblib) at startup
+
+Grey boxes are infrastructure. Green boxes are our code.
+
+- Caddy is the only part the internet can reach (ports 80 and 443). The app container is reachable from Caddy alone.
+- One FastAPI process serves the page, the API and the model. The model file is read once at start.
+- There is no database, and no personal data is stored.
+- The container runs one worker on purpose, because the rate limit counts requests in memory (see "Seams for later").
+
+### Code layers
+
+```mermaid
+flowchart TB
+    W["<b>Web page (React)</b><br/>views, components, api.ts<br/><i>frontend/src/</i>"]
+    subgraph SVC["FastAPI container, one process"]
+        direction TB
+        L1["<b>1. API layer</b><br/>HTTP in, HTTP out<br/><i>app/main.py, schema.py</i>"]
+        L2["<b>2. Service layer</b><br/>the estimate use case<br/><i>app/service.py</i>"]
+        L3["<b>3. Model layer</b><br/>checks, features, predict<br/><i>src/flood_payout/</i>"]
+        L4["<b>4. Infrastructure</b><br/>settings, model file loading<br/><i>app/config.py</i>"]
+    end
+    W -->|"JSON over HTTPS"| SVC
+    L1 --> L2
+    L2 --> L3
+    L3 --> L4
+    classDef exists fill:#E1F5EE,stroke:#0F6E56,color:#04342C
+    classDef planned fill:#EEEDFE,stroke:#534AB7,stroke-dasharray:5 4,color:#26215C
+    class W,L1,L3 exists
+    class L2,L4 planned
+    style SVC fill:none,stroke:#888780,stroke-dasharray:5 4
 ```
+
+Green boxes exist today. Purple dashed boxes are new files planned for the final.
+
+| Layer | Job | Files | Status |
+|---|---|---|---|
+| 1. API | Turns HTTP into calls and results into HTTP: routes, the shape of the request (Pydantic), the rate limit, errors to status codes, serving the page | `app/main.py`, `app/schema.py` | Exists. Will shrink to routing only |
+| 2. Service | The "estimate a payout" use case: takes the checked request, calls the model layer, builds the answer, keeps the request counters and logs | `app/service.py` | New for the final. Today this code sits inside `main.py` |
+| 3. Model | Business checks (`validate`), features, prediction, the model bundle format. No web code | `src/flood_payout/` | Exists |
+| 4. Infrastructure | Settings from environment variables (`RATE_LIMIT`, `MODEL_PATH`, `STATIC_DIR`) in one place, and loading the model file at start | `app/config.py` | New for the final. Today settings are read in `main.py` and `model.py`, and the model loads when `model.py` is imported |
+
+Rules that make the layers useful:
+
+1. Dependencies point down only. A layer may use the layers below it and never the ones above. The model layer knows nothing about FastAPI, and the API layer does not import scikit-learn or pandas.
+2. One allowed shortcut: `schema.py` reads the field lists from the model layer, so the form checks and the model's own checks cannot drift apart.
+3. The page follows a similar rule. Screens in `views/` and `components/` never call the service themselves. `api.ts` is the only file that does.
+
+Where to look when something is wrong:
+
+| Symptom | Layer | Look in |
+|---|---|---|
+| The amount or range is wrong | Model | `src/flood_payout/`, `models/` |
+| Wrong error message or status code, or the page is not served | API | `app/main.py`, `app/schema.py` |
+| The response is built wrong, or counters and logs are off | Service | `app/service.py` (today `app/main.py`) |
+| A setting is ignored, the wrong model loads, a wrong port or certificate | Infrastructure | `app/config.py`, `Caddyfile`, `docker-compose.yml` |
+| A screen looks or reads wrong | Page | `frontend/src/views/`, `frontend/src/components/` |
+
+Seams for later. The service stays one unit for now. These are the places where it would split if a real need appears:
+
+- **Rate limit.** It counts requests in memory, so the container runs one worker (`--workers 1`). More workers or servers need a shared store, or the limit moves to the gateway.
+- **Model release.** The model file ships inside the image, so a retrain means a rebuild and a redeploy. `MODEL_PATH` already allows loading it from elsewhere (a volume or S3). That would let us retrain without rebuilding.
+- **The page.** Vite builds static files, so the page could move to S3 and CloudFront. The cost is CORS settings, a second deploy and a chance of page and API being on different versions.
+
+### Plan for the final
+
+Each step ends with all tests passing.
+
+1. Move the API tests that are kept outside the repository for now (`test_api.py`) into `tests/`, so HTTP behaviour is locked before anything moves.
+2. Add `app/config.py` and read all settings from it.
+3. Add `app/service.py`. Move the estimate logic and counters out of `main.py`, so the routes only translate HTTP.
+4. Load the model at start and keep it on `app.state`, so tests can use a fake model.
+5. Optional: split `src/flood_payout/bundle.py` into prediction and training code. Ahmad's tests import it as `B`, so `bundle.py` stays as a thin re-export.
 
 ## 3. Stack by layer
 
@@ -37,7 +121,7 @@ FastAPI app (container)
 | Testing (frontend) | Vitest, React Testing Library | Form validation and the form-to-result flow | Runs on pull requests |
 | Packaging | Docker (multi-stage build), Docker Compose | One image per model version. Stage 1 builds the React app; stage 2 is the Python runtime | Compose runs the app and Caddy together |
 | Reverse proxy | Caddy | HTTPS, with certificates issued and renewed automatically | HTTP only until a domain points at the server |
-| Hosting | AWS EC2, t3.small, Ubuntu LTS, Elastic IP, region ap-southeast-1 (Singapore) | Runs the containers | Free plan credits cover the prototype if the account is eligible (to be verified) |
+| Hosting | AWS EC2, t3.small, Ubuntu LTS, Elastic IP, region ap-southeast-1 (Singapore) | Runs the containers | A new AWS free-plan account should cover the prototype; confirm the $100 credit arrives before relying on it (section 8) |
 | Registry | GitHub Container Registry (GHCR) | Stores tagged images | No extra AWS account or keys needed to push |
 | Source control | GitHub (private repository) | Code, pull requests, workflows | Keep the repository private |
 | CI | GitHub Actions on GitHub-hosted runners | Checks on every pull request | Lint, tests, leakage check, regression check, build without push |
@@ -47,7 +131,7 @@ FastAPI app (container)
 
 ## 4. Why these choices
 
-- **Monolith.** One FastAPI service serves the API, the model and the React build. It is the simplest option for one model and one server, and it is easy to deploy and debug.
+- **Monolith, organised in layers.** One FastAPI service serves the API, the model and the React build. It is the simplest option for one model and one server, and it is easy to deploy and debug. Layers (section 2) keep the code easy to fix, because each kind of bug has one home. Splitting into several services would add work without a benefit at this size.
 - **Iterative development.** Work runs in thin slices, and each slice ends with something that runs or is deployed. Waterfall was not chosen because the model and UI may change after results come in.
 - **React with Vite.** The team knows React from MERN work. Vite produces plain static files, which can move to S3 and CloudFront later. A plain HTML page with Tailwind is the fallback if time runs short.
 - **EC2 with Docker Compose, not Lambda, for now.** One server is easier to debug while the team learns AWS. Lambda is the upgrade path.
@@ -91,7 +175,8 @@ Caddyfile             HTTPS and reverse proxy
 
 ## 8. Open decisions
 
-- AWS account source: AWS free plan credits or a course account. Ask the TA first.
+- **AWS account (next step):** the TA confirmed the course provides no AWS account. Open a new AWS account on the free plan and check that the $100 sign-up credit arrives. Accounts created on or after 15 July 2025 get that credit, plus up to $100 more for trying services, for 6 months or until it is used up, and `t3.small` is eligible. Pick region `ap-southeast-1` (Singapore) and set a budget alert before launching anything.
+- **Backup host if AWS does not work out (open):** DigitalOcean or Azure. DigitalOcean's GitHub Student Pack credit ended on 31 July 2026, so a 2 GiB Droplet would cost about $12 per month unless a new-user offer applies. For Azure, check what the current Azure for Students offer gives with a school email. Decide only if the AWS credit does not arrive.
 - Settled for the MVP: FastAPI with Pydantic, React with Vite, scikit-learn 1.9.1 and Python 3.13 (the versions the model was built with), and `pandas` in the request path.
 
 ## 9. Fallback and backup plan
@@ -205,3 +290,47 @@ The first build downloads the base images and packages, so it takes a while. Ope
 | Docker: port 80 or 443 is already allocated | Stop the program that uses it, or change the `ports` entries in `docker-compose.yml`. |
 
 The claims data is not in this repository. `retrain.py` needs it as input (`--table`), so retraining runs where the data is.
+
+## 11. Tests
+
+There are 26 automated tests: 11 for the service and 15 for the web page. GitHub Actions runs all of them on every pull request and every push to `main`. To run them yourself, follow the steps in section 10: `pytest` for the service and `cd frontend && npm test` for the page.
+
+### Service tests (11, `tests/test_service.py`)
+
+| Group | Test | What it checks |
+|---|---|---|
+| Leakage guard | `test_adjuster_fields_rejected` | Fields that only exist after an adjuster visits (`post_damage_building`, `paid_building`, `post_building_value`, `damage_estimate`, `id`) are refused as model inputs. |
+| Leakage guard | `test_bundle_uses_only_allowed_inputs` | The saved model, with and without flood depth, uses only the allowed inputs. |
+| Validation | `test_missing_required` | A missing required answer (`coverage_building`) gives an error that names the field. |
+| Validation | `test_bad_values` | Rejects an unknown state, coverage of $900,000, negative depth, floors "seven", a year built of 1700 and elevated "maybe". |
+| Validation | `test_unknown_field_rejected` | An extra field such as `building_damage` is refused. |
+| Validation | `test_optional_fields_default` | Optional answers left out fall back to defaults (foundation "unknown", no depth). |
+| Answers | `test_range_is_ordered_and_capped` | For depths of 0 to 48 inches and unknown, and coverage of $50,000 to $250,000: low is at least 0, low <= middle <= high, high does not exceed the coverage limit, the payout-band shares add up to 1, and the chance of $0 is between 0 and 1. |
+| Answers | `test_unknown_depth_uses_no_depth_model` | With no depth given, the model built without depth is used. |
+| Answers | `test_deeper_water_raises_middle_guess` | The middle guess for 36 inches of water is higher than for 0 inches. |
+| Answers | `test_batch_equals_single` | Estimating several houses at once gives the same answers as one at a time. |
+| Regression | `test_example_houses_unchanged` | The six example houses in `tests/expected_examples.json` still return the same low, middle and high (within 2%, at least $200), so a model change cannot shift answers unnoticed. |
+
+### Web page tests (15, `frontend/src/`)
+
+| File | Test | What it checks |
+|---|---|---|
+| `format.test.ts` | dollars | Dollar amounts show thousands separators. |
+| `format.test.ts` | small chances | A very small chance does not show as 0%. |
+| `form.test.ts` | `parseNumber` accepts messy input | Commas, dollar signs and spaces are accepted. |
+| `form.test.ts` | `parseNumber` rejects non-numbers | Empty or non-numeric text gives no number. |
+| `form.test.ts` | request shape | The form builds the request the service expects. |
+| `form.test.ts` | feet to inches | A depth given in feet is converted to inches. |
+| `form.test.ts` | "Not sure" depth | No depth is sent when the person is not sure. |
+| `form.test.ts` | required answers | The four required answers must be filled in. |
+| `form.test.ts` | depth required | A depth is required unless "Not sure" is chosen. |
+| `form.test.ts` | allowed ranges | Values outside the allowed ranges are rejected. |
+| `App.test.tsx` | home to result | Home, then form, then result; the homeowner's answers are sent without a state. |
+| `App.test.tsx` | missing answers | Field errors appear and the service is not called. |
+| `App.test.tsx` | error and Try again | An error panel appears and Try again resends the same request. |
+| `App.test.tsx` | Change inputs / Start over | Change inputs keeps the answers; Start over clears them. |
+| `App.test.tsx` | How it works | The How it works page opens from the home page. |
+
+### Not tested yet
+
+HTTP behaviour of the service (status codes, the request limit, serving the page) and the Docker and Caddy setup are not covered. API tests for these are written and kept outside the repository for now. They move into `tests/` before the first deployment.
