@@ -1,0 +1,43 @@
+# Compose file for the AWS server. On your own computer use docker-compose.yml instead.
+#
+# scripts/deploy.sh copies this file to ~/flood-payout/docker-compose.yml on the server and starts it.
+# Unlike docker-compose.yml it never builds: it pulls the image that GitHub Actions built and pushed
+# (job "publish" in .github/workflows/ci.yml). Two settings come from ~/flood-payout/.env:
+#   DOMAIN     you set it once, for example flood-payout-alpha.duckdns.org
+#   IMAGE_TAG  scripts/deploy.sh sets it on every deploy, for example sha-1a2b3c4
+name: flood-payout
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"        # keep the small server disk from filling with logs
+    max-file: "3"
+
+services:
+  app:
+    image: ${IMAGE_REPO:-ghcr.io/alpha-beta-gamma-delta-chaky/flood-payout-calculator}:${IMAGE_TAG:?IMAGE_TAG is not set - run scripts/deploy.sh}
+    restart: unless-stopped
+    logging: *logging
+    expose:
+      - "8000"                 # reachable from Caddy on the compose network only, not from the internet
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      app:
+        condition: service_healthy   # uses the HEALTHCHECK in the Dockerfile
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is not set in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data           # certificates live here; keep this volume across deploys
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

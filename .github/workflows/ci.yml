@@ -1,5 +1,6 @@
-# Checks on every pull request and on every push to main. GitHub-hosted runners: no AWS access, no secrets.
-# The deploy workflow comes later, separately, and runs only from main.
+# Checks on every pull request and on every push to main. Checks run on GitHub-hosted runners: no AWS access.
+# The last job, "publish", runs only on pushes to main, after every check passed: it builds the image and
+# pushes it to GitHub's container registry (ghcr.io). Putting it on the server is a separate, manual step: deploy.yml.
 name: ci
 
 on:
@@ -15,8 +16,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
@@ -32,8 +33,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: frontend/.nvmrc
           cache: npm
@@ -47,8 +48,66 @@ jobs:
     needs: [backend, frontend]
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - name: Check the compose file
-        run: docker compose config --quiet
+      - uses: actions/checkout@v7
+      - name: Check the compose files
+        run: |
+          docker compose config --quiet
+          IMAGE_TAG=ci DOMAIN=example.com docker compose -f docker-compose.prod.yml config --quiet
       - name: Build the image (React build, then the Python runtime)
         run: docker build -t flood-payout:ci .
+
+  publish:
+    # Pushes to main only, never pull requests. One at a time, so two quick pushes cannot mix up the tags.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend, docker]
+    runs-on: ubuntu-24.04     # x86, the same CPU type as the AWS server, so no emulation is needed
+    timeout-minutes: 25
+    concurrency:
+      group: publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Image name and tags
+        run: |
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"     # registry names must be lower case
+          echo "SHA_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the image (kept on this runner for now)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE }}:candidate
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start the container and run the smoke test
+        run: |
+          docker run -d --name candidate -p 8000:8000 "$IMAGE:candidate"
+          python3 scripts/smoke_test.py http://localhost:8000 --wait 90
+
+      - name: Show the container log if that failed
+        if: failure()
+        run: docker logs candidate || true
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push (tags - sha-xxxxxxx never changes, main always points at the newest build)
+        run: |
+          for tag in "$SHA_TAG" main; do
+            docker tag "$IMAGE:candidate" "$IMAGE:$tag"
+            docker push "$IMAGE:$tag"
+          done

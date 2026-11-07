@@ -5,7 +5,7 @@ Status: the local MVP runs (FastAPI service and React page), including under Doc
 
 ## 1. Summary
 
-The calculator is one web application. A Python backend loads the trained model and serves both the API and the web page. The page is built with React. Everything runs in one Docker container on one AWS EC2 server in Singapore, behind Caddy for HTTPS.
+The calculator is one web application. A Python backend loads the trained model and serves both the API and the web page. The page is built with React. Everything runs in one Docker container on one AWS EC2 server in Sydney, behind Caddy for HTTPS.
 
 ## 2. Architecture
 
@@ -121,7 +121,7 @@ Each step ends with all tests passing.
 | Testing (frontend) | Vitest, React Testing Library | Form validation and the form-to-result flow | Runs on pull requests |
 | Packaging | Docker (multi-stage build), Docker Compose | One image per model version. Stage 1 builds the React app; stage 2 is the Python runtime | Compose runs the app and Caddy together |
 | Reverse proxy | Caddy | HTTPS, with certificates issued and renewed automatically | HTTP only until a domain points at the server |
-| Hosting | AWS EC2, t3.small, Ubuntu LTS, Elastic IP, region ap-southeast-1 (Singapore) | Runs the containers | A new AWS free-plan account should cover the prototype; confirm the $100 credit arrives before relying on it (section 8) |
+| Hosting | AWS EC2, t3.small, Ubuntu LTS, Elastic IP, region ap-southeast-2 (Sydney) | Runs the containers | The new AWS free-plan account covers the prototype: the $100 credit arrived on 7 November 2026. The free plan fixes the region to Sydney (section 8) |
 | Registry | GitHub Container Registry (GHCR) | Stores tagged images | No extra AWS account or keys needed to push |
 | Source control | GitHub (private repository) | Code, pull requests, workflows | Keep the repository private |
 | CI | GitHub Actions on GitHub-hosted runners | Checks on every pull request | Lint, tests, leakage check, regression check, build without push |
@@ -175,7 +175,7 @@ Caddyfile             HTTPS and reverse proxy
 
 ## 8. Open decisions
 
-- **AWS account (next step):** the TA confirmed the course provides no AWS account. Open a new AWS account on the free plan and check that the $100 sign-up credit arrives. Accounts created on or after 15 July 2025 get that credit, plus up to $100 more for trying services, for 6 months or until it is used up, and `t3.small` is eligible. Pick region `ap-southeast-1` (Singapore) and set a budget alert before launching anything.
+- **AWS account (done):** the TA confirmed the course provides no AWS account, so we opened a new account on the free plan. The $100 sign-up credit arrived on 7 November 2026, and setting a budget earned a further $20. The free plan lasts 6 months or until the credits run out. A new account's default project is pinned to one region based on the contact address, and ours is Asia Pacific (Sydney), `ap-southeast-2`. Using Singapore would need an upgrade to the paid plan and advanced features, which risks real charges, so we stay in Sydney. The extra distance does not matter for a demo.
 - **Backup host if AWS does not work out (open):** Render, with Vercel for the page as an option. Both have free plans and the team already knows them (details in section 9). DigitalOcean or Azure also stay possible: DigitalOcean's GitHub Student Pack credit ended on 31 July 2026, so a 2 GiB Droplet would cost about $12 per month unless a new-user offer applies, and for Azure we would check what the current Azure for Students offer gives with a school email. Decide only if the AWS credit does not arrive.
 - Settled for the MVP: FastAPI with Pydantic, React with Vite, scikit-learn 1.9.1 and Python 3.13 (the versions the model was built with), and `pandas` in the request path.
 

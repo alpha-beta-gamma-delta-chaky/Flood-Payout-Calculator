@@ -1,0 +1,52 @@
+# Manual deploy to the AWS server. Nothing here runs by itself.
+#
+# How to start it: GitHub -> Actions -> "deploy" -> Run workflow, branch "main".
+#   Tag empty            deploy the newest build of main (published by the "publish" job in ci.yml)
+#   Tag sha-1a2b3c4      deploy that build instead (this is also how you go back to an older version)
+#
+# It runs on the self-hosted runner on the server (labels self-hosted, Linux, X64, prod), pulls the image from
+# GitHub's container registry, starts it, runs scripts/smoke_test.py against the public https:// address, and
+# returns to the last good tag if the test fails. The job then shows as failed so you notice.
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag. Leave empty for the newest build of main, or give one such as sha-1a2b3c4"
+        required: false
+        default: ""
+
+# Two deploys at the same time would fight over the same containers.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    # Only code that is on main may run on the server.
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, prod]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Log in to the container registry
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Deploy (goes back to the last good tag if the smoke test fails)
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          export IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}"
+          bash scripts/deploy.sh "${INPUT_TAG:-main}"
+
+      - name: Log out of the registry
+        if: always()
+        run: docker logout ghcr.io
