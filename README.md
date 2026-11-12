@@ -1,7 +1,7 @@
 # Tech Stack: Flood Payout Calculator
 
-Last updated: 8 November 2026
-Status: the app is live at https://flood-payout-alpha.duckdns.org on an AWS server in Sydney, deployed with the workflows in section 12. The daily health check and the CloudWatch alarm are not set up yet. To run the app on your computer, go to section 10.
+Last updated: 13 November 2026
+Status: the app is live at https://flood-payout-alpha.duckdns.org on an AWS server in Sydney. Every push to `main` that passes the checks is built and deployed automatically, and a daily health check watches the live site (section 12). The CloudWatch alarm is not set up yet. To run the app on your computer, go to section 10.
 
 ## 1. Summary
 
@@ -124,9 +124,9 @@ Each step ends with all tests passing.
 | Hosting | AWS EC2, t3.small, Ubuntu LTS, Elastic IP, region ap-southeast-2 (Sydney) | Runs the containers | The new AWS free-plan account covers the prototype: the $100 credit arrived on 7 November 2026. The free plan fixes the region to Sydney (section 8) |
 | Registry | GitHub Container Registry (GHCR) | Stores the images: `sha-xxxxxxx` for each build (never changes) and `main` for the newest | No extra AWS account or keys needed to push |
 | Source control | GitHub (private repository) | Code, pull requests, workflows | Keep the repository private |
-| CI | GitHub Actions on GitHub-hosted runners | Checks on every pull request and every push to `main`. On `main`, after the checks pass, it also builds and publishes the image | Lint, tests, build without push. Publish: build the x86 image, start the container, run the smoke test, push to GHCR |
-| CD | GitHub Actions with a self-hosted runner on the EC2 server | Deploys when someone starts the deploy workflow by hand from `main` | `scripts/deploy.sh` smoke-tests the public address and goes back to the last good tag if the test fails. Rolling back by hand means running the same workflow with an older tag. (Approval gates on environments are not available on private repositories on the free plan) |
-| Monitoring | AWS Budgets alert; planned: daily health check from GitHub Actions and a CloudWatch CPU alarm | Detects outages and unexpected cost | The budget alert is set. The health check and the alarm are not set up yet |
+| CI | GitHub Actions on GitHub-hosted runners | Checks on every pull request and every push to `main`. On `main`, after the checks pass, it also builds and publishes the image, then deploys it | Lint, tests, build without push. Publish: build the x86 image, start the container, run the smoke test, push to GHCR |
+| CD | GitHub Actions with a self-hosted runner on the EC2 server | Deploys automatically after every successful push to `main` (the `deploy` job at the end of `ci.yml`). The `deploy` workflow can also be run by hand from `main` | `scripts/deploy.sh` smoke-tests the public address and goes back to the last good tag if the test fails. Rolling back by hand means running the `deploy` workflow with an older tag. (Approval gates on environments are not available on private repositories on the free plan) |
+| Monitoring | Daily health check from GitHub Actions (`health.yml`: smoke test of the live site and HTTPS certificate check), AWS Budgets alert; planned: CloudWatch CPU alarm | Detects outages, an expiring certificate and unexpected cost | The health check runs since 13 November 2026 and the budget alert is set. The CloudWatch alarm is not set up yet |
 | Upgrade path (later) | AWS Lambda with Lambda Web Adapter, API Gateway, ECR, S3 and CloudFront, GitHub OIDC | Serverless hosting when the server is idle or traffic is spiky | Same Docker image; not started in this phase |
 
 ## 4. Why these choices
@@ -158,7 +158,7 @@ Caddyfile             HTTPS and reverse proxy
 .env.example          DOMAIN setting (copy to .env)
 .python-version       Python 3.13 (Node 22 is in frontend/.nvmrc)
 scripts/              smoke_test.py (checks a running service), deploy.sh (deploy and rollback, runs on the server)
-.github/workflows/    ci.yml (checks on pull requests; on main also builds and pushes the image), deploy.yml (manual deploy)
+.github/workflows/    ci.yml (checks on pull requests; on main also builds, publishes and deploys), deploy.yml (deploy, called by ci.yml or run by hand), health.yml (daily check)
 ```
 
 ## 6. Version pinning
@@ -359,7 +359,7 @@ The Docker and Caddy setup has no automated test of its own. It was run by hand 
 
 ## 12. Deploy to AWS
 
-The app is live at https://flood-payout-alpha.duckdns.org. A change reaches the server in two steps: GitHub builds the image by itself, and a person starts the deploy by hand.
+The app is live at https://flood-payout-alpha.duckdns.org. A change reaches the server with no manual step: a push to `main` is tested, built into an image, and deployed, all in one `ci` run. The `deploy` workflow can also be started by hand, to redeploy or to go back to an older build.
 
 ### How a change reaches the server
 
@@ -368,14 +368,14 @@ flowchart LR
     P([Merge to main]) --> C[ci.yml: backend, frontend, docker checks]
     C --> B[publish job: build x86 image, start it, run smoke test]
     B --> R[(GHCR: sha-xxxxxxx and main)]
-    R --> D[Someone runs deploy by hand]
+    R --> D[deploy job: automatic on main, or run by hand]
     D --> S[Server: pull, start, smoke test the public address]
     S -->|passes| OK([Live: tag saved as last good])
     S -->|fails| RB([Back to the last good tag, job shows red])
 ```
 
 1. **Merge to `main`.** `ci.yml` runs the backend, frontend and docker jobs. If they pass, the `publish` job builds the image on a GitHub x86 runner (the same CPU type as the server), starts it, runs `scripts/smoke_test.py` against it, and pushes it to GHCR as `sha-xxxxxxx` (this tag never changes) and `main` (always the newest build).
-2. **Start the deploy.** On GitHub: Actions, then `deploy`, then Run workflow, branch `main`. Leave Tag empty for the newest build, or enter a tag such as `sha-1a2b3c4` for an older one. The job runs on the self-hosted runner on the server, and only starts from `main`.
+2. **Deploy.** The last job of the same `ci` run, `deploy`, calls `deploy.yml` with the tag that `publish` just pushed, so exactly that build goes live. It runs on the self-hosted runner on the server, only for pushes to `main`, never for pull requests. To deploy by hand (to redeploy or to roll back), go to Actions, then `deploy`, then Run workflow, branch `main`: leave Tag empty for the newest build, or enter a tag such as `sha-1a2b3c4`.
 3. **`scripts/deploy.sh` does the work.** It finds the exact build behind the tag, copies `docker-compose.prod.yml` and the Caddyfile to `~/flood-payout`, writes `IMAGE_TAG` to `.env`, pulls the image and starts it. It waits for the container's health check, reloads Caddy, then smoke-tests the public address. The test retries for up to 2 minutes, which gives the first HTTPS certificate time to arrive.
 4. **Pass or fail.** On a pass, the tag is saved as the last good one. On a failure, the log shows the container logs, the script starts the last good tag again, and the job shows red so someone notices. The very first deploy has no earlier tag, so nothing can be rolled back then.
 
@@ -399,6 +399,8 @@ An update replaces the app container, so the site is unavailable for a few secon
 | Task | How |
 |---|---|
 | Check the live site | `python3 scripts/smoke_test.py https://flood-payout-alpha.duckdns.org` from any computer with Python 3 |
+| Daily health check | `health` runs every day at 08:17 Bangkok time and emails on failure. Run it by hand from Actions, then `health`, then Run workflow. Disable it while the server is stopped on purpose |
+| Work that is not ready | Use a branch and a pull request. Pull requests run the checks but never deploy |
 | Go back to an older build | Run the `deploy` workflow with an older tag. The tags are listed on GitHub under the repository's Packages |
 | Read the logs | Log in with `ssh -i <key file> ubuntu@52.62.228.131`, then `cd ~/flood-payout && docker compose ps && docker compose logs --tail 100 app caddy` |
 | Save credit between work sessions | EC2 console, Instance state, Stop (never Terminate, which deletes the server). The Elastic IP keeps the address. The containers are set to restart by themselves; this is not tested yet (section 11) |
