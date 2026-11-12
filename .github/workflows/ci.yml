@@ -1,6 +1,8 @@
 # Checks on every pull request and on every push to main. Checks run on GitHub-hosted runners: no AWS access.
-# The last job, "publish", runs only on pushes to main, after every check passed: it builds the image and
-# pushes it to GitHub's container registry (ghcr.io). Putting it on the server is a separate, manual step: deploy.yml.
+# On pushes to main only, after every check passed, two more jobs run:
+#   publish  builds the image, smoke-tests the container, and pushes it to GitHub's container registry (ghcr.io)
+#   deploy   puts exactly that build on the AWS server (deploy.yml: smoke test, rollback to the last good tag)
+# deploy.yml can still be started by hand, to redeploy or to go back to an older build.
 name: ci
 
 on:
@@ -68,11 +70,15 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      tag: ${{ steps.names.outputs.tag }}       # handed to the deploy job below
     steps:
       - uses: actions/checkout@v7
 
       - name: Image name and tags
+        id: names
         run: |
+          echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"     # registry names must be lower case
           echo "SHA_TAG=sha-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
 
@@ -111,3 +117,14 @@ jobs:
             docker tag "$IMAGE:candidate" "$IMAGE:$tag"
             docker push "$IMAGE:$tag"
           done
+
+  deploy:
+    # Continuous deployment: every push to main that passes all checks and the publish job goes live by itself.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: publish
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      tag: ${{ needs.publish.outputs.tag }}

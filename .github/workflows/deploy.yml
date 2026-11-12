@@ -1,8 +1,9 @@
-# Manual deploy to the AWS server. Nothing here runs by itself.
-#
-# How to start it: GitHub -> Actions -> "deploy" -> Run workflow, branch "main".
-#   Tag empty            deploy the newest build of main (published by the "publish" job in ci.yml)
-#   Tag sha-1a2b3c4      deploy that build instead (this is also how you go back to an older version)
+# Deploy to the AWS server. Started in two ways:
+#   1. Automatically: the "deploy" job at the end of ci.yml calls this file after every successful push to main,
+#      with the tag of the build that ci.yml just published.
+#   2. By hand: GitHub -> Actions -> "deploy" -> Run workflow, branch "main".
+#        Tag empty            deploy the newest build of main
+#        Tag sha-1a2b3c4      deploy that build instead (this is how you go back to an older version)
 #
 # It runs on the self-hosted runner on the server (labels self-hosted, Linux, X64, prod), pulls the image from
 # GitHub's container registry, starts it, runs scripts/smoke_test.py against the public https:// address, and
@@ -16,6 +17,12 @@ on:
         description: "Image tag. Leave empty for the newest build of main, or give one such as sha-1a2b3c4"
         required: false
         default: ""
+  workflow_call:
+    inputs:
+      tag:
+        description: "Image tag to deploy, for example sha-1a2b3c4"
+        type: string
+        required: true
 
 # Two deploys at the same time would fight over the same containers.
 concurrency:
