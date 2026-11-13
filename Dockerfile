@@ -34,7 +34,7 @@ USER appuser
 
 # Fail the build if the model file does not load with these library versions. This runs as the same
 # non-root user as the service, so a permission problem fails the build instead of the start-up.
-RUN python -c "from app import model; print('model loads:', model.info())"
+RUN python -c "from app import model; from app.config import Settings; print('model loads:', model.info(model.load_bundle(Settings.from_env().model_path)))"
 EXPOSE 8000
 HEALTHCHECK CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 # --proxy-headers: the client IP (for the rate limit) comes from Caddy's X-Forwarded-For header. This is safe

@@ -53,31 +53,29 @@ flowchart TB
         L1["<b>1. API layer</b><br/>HTTP in, HTTP out<br/><i>app/main.py, schema.py</i>"]
         L2["<b>2. Service layer</b><br/>the estimate use case<br/><i>app/service.py</i>"]
         L3["<b>3. Model layer</b><br/>checks, features, predict<br/><i>src/flood_payout/</i>"]
-        L4["<b>4. Infrastructure</b><br/>settings, model file loading<br/><i>app/config.py</i>"]
+        L4["<b>4. Infrastructure</b><br/>settings, model file loading<br/><i>app/config.py, app/model.py</i>"]
     end
     W -->|"JSON over HTTPS"| SVC
     L1 --> L2
     L2 --> L3
     L3 --> L4
     classDef exists fill:#E1F5EE,stroke:#0F6E56,color:#04342C
-    classDef planned fill:#EEEDFE,stroke:#534AB7,stroke-dasharray:5 4,color:#26215C
-    class W,L1,L3 exists
-    class L2,L4 planned
+    class W,L1,L2,L3,L4 exists
     style SVC fill:none,stroke:#888780,stroke-dasharray:5 4
 ```
 
-Green boxes exist today. Purple dashed boxes are new files planned for the final.
+All four layers exist in the code since the refactor of 13 November 2026. `create_app` in `app/main.py` is the one place that wires them together: it reads the settings, loads the model once, builds the service and attaches the routes.
 
 | Layer | Job | Files | Status |
 |---|---|---|---|
-| 1. API | Turns HTTP into calls and results into HTTP: routes, the shape of the request (Pydantic), the rate limit, errors to status codes, serving the page | `app/main.py`, `app/schema.py` | Exists. Will shrink to routing only |
-| 2. Service | The "estimate a payout" use case: takes the checked request, calls the model layer, builds the answer, keeps the request counters and logs | `app/service.py` | New for the final. Today this code sits inside `main.py` |
-| 3. Model | Business checks (`validate`), features, prediction, the model bundle format. No web code | `src/flood_payout/` | Exists |
-| 4. Infrastructure | Settings from environment variables (`RATE_LIMIT`, `MODEL_PATH`, `STATIC_DIR`) in one place, and loading the model file at start | `app/config.py` | New for the final. Today settings are read in `main.py` and `model.py`, and the model loads when `model.py` is imported |
+| 1. API | Turns HTTP into calls and results into HTTP: routes, the shape of the request (Pydantic), the rate limit, errors to status codes, serving the page | `app/main.py`, `app/schema.py` | Routing only |
+| 2. Service | The "estimate a payout" use case: takes the checked request, calls the model layer, keeps the request counters and the timing log. No HTTP code | `app/service.py` (`EstimateService`) | Can be called and tested without a web server |
+| 3. Model | Split by job: `preprocessing.py` (request schema, `validate`, form to feature columns), `inference.py` (load a bundle, predict), `training.py` (fit and pack a bundle). `bundle.py` re-exports all three, so `from flood_payout import bundle as B` still works. No web code | `src/flood_payout/` | Preprocessing, inference and training are separate files; inference does not import training |
+| 4. Infrastructure | Settings from environment variables (`RATE_LIMIT`, `MODEL_PATH`, `STATIC_DIR`) in one place (`Settings`), and loading the model file once when the app is created | `app/config.py`, `app/model.py` | Nothing else in `app/` reads the environment; importing a module no longer loads the model |
 
 Rules that make the layers useful:
 
-1. Dependencies point down only. A layer may use the layers below it and never the ones above. The model layer knows nothing about FastAPI, and the API layer does not import scikit-learn or pandas.
+1. Dependencies point down only. A layer may use the layers below it and never the ones above. The model layer knows nothing about FastAPI, and the API and service layers do not import scikit-learn, pandas, numpy or joblib. `tests/test_layers.py` checks these rules on every run, by reading each file's imports.
 2. One allowed shortcut: `schema.py` reads the field lists from the model layer, so the form checks and the model's own checks cannot drift apart.
 3. The page follows a similar rule. Screens in `views/` and `components/` never call the service themselves. `api.ts` is the only file that does.
 
@@ -85,9 +83,10 @@ Where to look when something is wrong:
 
 | Symptom | Layer | Look in |
 |---|---|---|
-| The amount or range is wrong | Model | `src/flood_payout/`, `models/` |
+| The amount or range is wrong | Model | `src/flood_payout/inference.py`, `models/` |
+| A valid answer is refused, or a form field maps to the wrong feature | Model | `src/flood_payout/preprocessing.py` |
 | Wrong error message or status code, or the page is not served | API | `app/main.py`, `app/schema.py` |
-| The response is built wrong, or counters and logs are off | Service | `app/service.py` (today `app/main.py`) |
+| The counters or the timing log are off | Service | `app/service.py` |
 | A setting is ignored, the wrong model loads, a wrong port or certificate | Infrastructure | `app/config.py`, `Caddyfile`, `docker-compose.yml` |
 | A screen looks or reads wrong | Page | `frontend/src/views/`, `frontend/src/components/` |
 
@@ -97,15 +96,17 @@ Seams for later. The service stays one unit for now. These are the places where 
 - **Model release.** The model file ships inside the image, so a retrain means a rebuild and a redeploy. `MODEL_PATH` already allows loading it from elsewhere (a volume or S3). That would let us retrain without rebuilding.
 - **The page.** Vite builds static files, so the page could move to S3 and CloudFront (or Vercel). The cost is CORS settings, a second deploy and a chance of page and API being on different versions.
 
-### Plan for the final
+### How the layers were introduced
 
-Each step ends with all tests passing.
+Each step ended with all tests passing.
 
-1. Done on 7 November 2026: the API tests are in `tests/test_api.py`, so HTTP behaviour is locked before anything moves.
-2. Add `app/config.py` and read all settings from it.
-3. Add `app/service.py`. Move the estimate logic and counters out of `main.py`, so the routes only translate HTTP.
-4. Load the model at start and keep it on `app.state`, so tests can use a fake model.
-5. Optional: split `src/flood_payout/bundle.py` into prediction and training code. Ahmad's tests import it as `B`, so `bundle.py` stays as a thin re-export.
+1. 7 November 2026: the API tests went into `tests/test_api.py`, so HTTP behaviour was locked before anything moved.
+2. 13 November 2026: `app/config.py` was added and all settings are read from it.
+3. 13 November 2026: `app/service.py` was added. The estimate logic and the counters moved out of `main.py`, so the routes only translate HTTP.
+4. 13 November 2026: the model is loaded once when the app is created and kept on `app.state`, so tests can start the app with any settings or model file.
+5. 13 November 2026: `src/flood_payout/bundle.py` was split into `preprocessing.py`, `inference.py` and `training.py`. Ahmad's tests, the notebooks and `retrain.py` import it as before, because `bundle.py` re-exports everything.
+
+The refactor changed no behaviour: the 58 earlier tests pass unchanged apart from four lines in `tests/test_api.py` that read the model version, and the six recorded example houses give the same numbers.
 
 ## 3. Stack by layer
 
@@ -117,7 +118,7 @@ Each step ends with all tests passing.
 | Rate limiting | slowapi | Per-IP limit on `/api/estimate` (default 30 per minute, set with `RATE_LIMIT`) | Uses the `X-Forwarded-For` header that Caddy sets |
 | Frontend | React, Vite, Tailwind CSS | Input form, result page with range bar, "How it works" page | Vite builds static files. The range bar is custom, so no chart library is needed |
 | Design reference | Figma | Screen layouts, colours and type (Inter) | Design tool only. Not part of the running app |
-| Testing (backend) | pytest, httpx, ruff | Ahmad's 11 tests (leakage guard, input validation, answer checks, regression on six example houses), 47 API test cases (status codes, rate limit, response fields, allowed ranges, serving the page, model version), lint | Runs on pull requests |
+| Testing (backend) | pytest, httpx, ruff | Ahmad's 11 tests (leakage guard, input validation, answer checks, regression on six example houses), 47 API test cases (status codes, rate limit, response fields, allowed ranges, serving the page, model version), 11 layer tests (settings, model loading, the service without HTTP, layer boundaries), lint | Runs on pull requests |
 | Testing (frontend) | Vitest, React Testing Library | Form validation and the form-to-result flow | Runs on pull requests |
 | Packaging | Docker (multi-stage build), Docker Compose | One image per model version. Stage 1 builds the React app; stage 2 is the Python runtime | Compose runs the app and Caddy together |
 | Reverse proxy | Caddy | HTTPS, with certificates issued and renewed automatically | HTTP only until a domain points at the server |
@@ -141,12 +142,15 @@ Each step ends with all tests passing.
 ## 5. Repository layout
 
 ```
-app/                  FastAPI service: main.py (routes, rate limit), schema.py (Pydantic), model.py (loads the bundle)
-src/flood_payout/     shared model code: bundle.py (validation, prediction), features.py (form fields,
-                      leakage rules), final_config.py, models.py, evaluation.py
+app/                  FastAPI service by layer: main.py (routes, rate limit), schema.py (Pydantic), service.py (the
+                      estimate use case), config.py (settings), model.py (loads the bundle)
+src/flood_payout/     shared model code: preprocessing.py (schema, validation, features), inference.py (load,
+                      predict), training.py (fit, save), bundle.py (re-exports the three), features.py (form
+                      fields, leakage rules), final_config.py, models.py, evaluation.py
 models/               flood_payout_v2.joblib (model bundle) and MODEL_CARD.md
 frontend/             React + Vite + Tailwind source (npm run build writes frontend/dist)
-tests/                pytest: service tests (leakage guard, validation, answers, regression) and API tests (HTTP)
+tests/                pytest: service tests (leakage guard, validation, answers, regression), API tests (HTTP)
+                      and layer tests (settings, model loading, layer boundaries)
 retrain.py            seasonal retraining; promotes a new bundle only if it is not worse
 requirements.txt      pinned Python packages (production)
 requirements-dev.txt  adds pytest, httpx, ruff
@@ -229,7 +233,7 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
 ```
 
-**2. Check the back end.** Expect `All checks passed!` and `58 passed`.
+**2. Check the back end.** Expect `All checks passed!` and `69 passed`.
 
 ```
 ruff check .
@@ -301,7 +305,7 @@ The claims data is not in this repository. `retrain.py` needs it as input (`--ta
 
 ## 11. Tests
 
-There are 73 automated test cases: 58 for the service (11 service tests and 47 API cases) and 15 for the web page. GitHub Actions runs all of them on every pull request and every push to `main`. To run them yourself, follow the steps in section 10: `pytest` for the service and `cd frontend && npm test` for the page.
+There are 84 automated test cases: 69 for the service (11 service tests, 47 API cases and 11 layer tests) and 15 for the web page. GitHub Actions runs all of them on every pull request and every push to `main`. To run them yourself, follow the steps in section 10: `pytest` for the service and `cd frontend && npm test` for the page.
 
 ### Service tests (11, `tests/test_service.py`)
 
@@ -333,6 +337,18 @@ These send real HTTP requests to the service in memory, so they cover what the w
 | Rate limit | 2 | A limit of 3 per minute gives 200, 200, 200, 429, 429. The 429 answer carries `Retry-After: 60` and `"error": "rate limit"`, which the page uses. |
 | Serving the page | 2 | A built page is served at `/` while API routes still win. Without a build, `/` points to `/docs`. |
 | Model version | 1 | The installed scikit-learn version equals the one that saved the model file. |
+
+### Layer tests (11, `tests/test_layers.py`)
+
+These test each layer on its own, without a web server where possible, and check that the layers stay apart.
+
+| Group | What it checks |
+|---|---|
+| Settings | The defaults point at the shipped model file and the built page. `MODEL_PATH`, `STATIC_DIR` and `RATE_LIMIT` are read from the environment. No file in `app/` except `config.py` reads the environment. |
+| Model loading | The model file is read once and shared between apps. A missing model file stops the app at start instead of failing on the first request. |
+| Service | `EstimateService` answers the example house (38,600 / 88,500 / 138,600) with no HTTP involved, and counts requests, rejected forms and unknown depths correctly. |
+| Layer boundaries | `app/` does not import scikit-learn, pandas, numpy or joblib. `src/flood_payout/` does not import FastAPI, Pydantic or `app`. `inference.py` and `preprocessing.py` do not import the training code. |
+| App factory | `create_app` accepts a `Settings` object, serves the page from its `static_dir` and answers `/health`. |
 
 ### Web page tests (15, `frontend/src/`)
 
