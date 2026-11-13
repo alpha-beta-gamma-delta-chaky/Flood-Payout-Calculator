@@ -3,6 +3,8 @@
 #
 #   bash scripts/deploy.sh main            newest build of main
 #   bash scripts/deploy.sh sha-1a2b3c4     one specific build (also how you roll back by hand)
+#   SIMULATE_FAILURE=true bash scripts/deploy.sh sha-1a2b3c4
+#                                          rollback drill: the new tag "fails" on purpose, the last good tag returns
 #
 # Run by .github/workflows/deploy.yml on the self-hosted runner, from the checked-out repository.
 # It expects: docker already logged in to ghcr.io, and ~/flood-payout/.env containing DOMAIN=<name>.
@@ -55,6 +57,11 @@ start_and_test() {   # $1 = tag. Returns 1 on any failure. (Explicit "|| return 
     compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
     echo "--- Smoke test on https://$DOMAIN"
     python3 "$SRC_DIR/scripts/smoke_test.py" "https://$DOMAIN" --wait 120 || return 1
+    # Rollback drill: report a failure for the new tag only, never for the rollback (see deploy.yml).
+    if [ "${SIMULATE_FAILURE:-false}" = "true" ] && [ "$1" = "$TAG" ]; then
+        echo "::warning::Rollback drill: the smoke test passed, but this run reports a failure on purpose."
+        return 1
+    fi
 }
 
 # 1. Work out the exact build. "main" moves with every push, so find the sha-... tag of the image behind it.

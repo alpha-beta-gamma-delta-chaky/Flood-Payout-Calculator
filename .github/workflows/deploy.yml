@@ -17,6 +17,10 @@ on:
         description: "Image tag. Leave empty for the newest build of main, or give one such as sha-1a2b3c4"
         required: false
         default: ""
+      simulate_failure:
+        description: "Rollback drill: deploy the tag, then report a failed smoke test on purpose so the last good tag comes back"
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       tag:
@@ -50,6 +54,8 @@ jobs:
       - name: Deploy (goes back to the last good tag if the smoke test fails)
         env:
           INPUT_TAG: ${{ inputs.tag }}
+          # Only the manual run has this switch; automatic deploys from ci.yml leave it empty (= off).
+          SIMULATE_FAILURE: ${{ github.event.inputs.simulate_failure }}
         run: |
           export IMAGE_REPO="ghcr.io/${GITHUB_REPOSITORY,,}"
           bash scripts/deploy.sh "${INPUT_TAG:-main}"
