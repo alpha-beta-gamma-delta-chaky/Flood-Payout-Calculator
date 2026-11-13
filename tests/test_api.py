@@ -6,11 +6,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import model
+from app.config import Settings
 from app.main import create_app
 
 HOUSE = dict(flood_zone="A", year_built=1985, floors="1", foundation="slab", basement="none", elevated=False,
              primary_residence=True, coverage_building=250_000, deductible_building=1_250, water_depth_inches=12)
 EXAMPLES = json.loads((Path(__file__).parent / "expected_examples.json").read_text())
+MODEL_INFO = model.info(model.load_bundle(Settings().model_path))     # what the shipped model file reports
 
 
 @pytest.fixture()
@@ -22,7 +24,7 @@ def test_health(client):
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
-    assert r.json()["model_version"] == model.info()["model_version"]
+    assert r.json()["model_version"] == MODEL_INFO["model_version"]
 
 
 def test_docs_available(client):
@@ -164,4 +166,4 @@ def test_health_reports_the_model_in_use(client):
 
 def test_installed_scikit_learn_matches_the_one_that_saved_the_model():
     import sklearn
-    assert model.info()["sklearn_version"] == sklearn.__version__
+    assert MODEL_INFO["sklearn_version"] == sklearn.__version__
