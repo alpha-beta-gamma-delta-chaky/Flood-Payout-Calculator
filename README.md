@@ -1,7 +1,7 @@
 # Tech Stack: Flood Payout Calculator
 
 Last updated: 13 November 2026
-Status: the app is live at https://flood-payout-alpha.duckdns.org on an AWS server in Sydney. Every push to `main` that passes the checks is built and deployed automatically, and a daily health check watches the live site (section 12). The CloudWatch alarm is not set up yet. To run the app on your computer, go to section 10.
+Status: the app is live at https://flood-payout-alpha.duckdns.org on an AWS server in Sydney. Every push to `main` that passes the checks is built and deployed automatically, and a daily health check watches the live site (section 12). A CloudWatch alarm emails if the server's CPU stays high. To run the app on your computer, go to section 10.
 
 ## 1. Summary
 
@@ -126,7 +126,7 @@ Each step ends with all tests passing.
 | Source control | GitHub (private repository) | Code, pull requests, workflows | Keep the repository private |
 | CI | GitHub Actions on GitHub-hosted runners | Checks on every pull request and every push to `main`. On `main`, after the checks pass, it also builds and publishes the image, then deploys it | Lint, tests, build without push. Publish: build the x86 image, start the container, run the smoke test, push to GHCR |
 | CD | GitHub Actions with a self-hosted runner on the EC2 server | Deploys automatically after every successful push to `main` (the `deploy` job at the end of `ci.yml`). The `deploy` workflow can also be run by hand from `main` | `scripts/deploy.sh` smoke-tests the public address and goes back to the last good tag if the test fails. Rolling back by hand means running the `deploy` workflow with an older tag. (Approval gates on environments are not available on private repositories on the free plan) |
-| Monitoring | Daily health check from GitHub Actions (`health.yml`: smoke test of the live site and HTTPS certificate check), AWS Budgets alert; planned: CloudWatch CPU alarm | Detects outages, an expiring certificate and unexpected cost | The health check runs since 13 November 2026 and the budget alert is set. The CloudWatch alarm is not set up yet |
+| Monitoring | Daily health check from GitHub Actions (`health.yml`: smoke test of the live site and HTTPS certificate check), CloudWatch alarm `flood-payout-cpu-high` (CPU at 80% or more for 15 minutes, email through SNS), AWS Budgets alert | Detects outages, an expiring certificate, a stuck or overloaded server, and unexpected cost | All three are running since 13 November 2026. The CloudWatch alarm was tested on 13 November by lowering its threshold: it fired and the email arrived |
 | Upgrade path (later) | AWS Lambda with Lambda Web Adapter, API Gateway, ECR, S3 and CloudFront, GitHub OIDC | Serverless hosting when the server is idle or traffic is spiky | Same Docker image; not started in this phase |
 
 ## 4. Why these choices
@@ -155,6 +155,7 @@ Dockerfile            multi-stage: builds the React app, then the Python runtime
 docker-compose.yml    app + Caddy together
 docker-compose.prod.yml  server version: pulls the image from GHCR instead of building it
 Caddyfile             HTTPS and reverse proxy
+RUNBOOK.md            what to do when something needs attention on the live server
 .env.example          DOMAIN setting (copy to .env)
 .python-version       Python 3.13 (Node 22 is in frontend/.nvmrc)
 scripts/              smoke_test.py (checks a running service), deploy.sh (deploy and rollback, runs on the server)
@@ -387,14 +388,16 @@ An update replaces the app container, so the site is unavailable for a few secon
 |---|---|
 | Cloud | AWS, region ap-southeast-2 (Sydney) |
 | Instance | `flood-payout`, t3.small, Ubuntu 24.04 LTS (x86), 20 GiB disk |
-| Address | Elastic IP 52.62.228.131 and the name `flood-payout-alpha.duckdns.org` (DuckDNS) |
+| Address | A fixed Elastic IP and the name `flood-payout-alpha.duckdns.org` (DuckDNS). The IP is not written here: ask the project owner (Han) for the address and the key file if you need them |
 | Firewall (security group `launch-wizard-1`) | Ports 80 and 443 from anywhere. SSH (port 22) from one admin IPv4 address only; edit that rule when the address changes, and delete it when SSH is not needed |
 | Software | Docker 29.9.3 and Docker Compose v5.7.0 |
 | Deploy runner | GitHub self-hosted runner `flood-payout-ec2` in `~/actions-runner`, installed as a system service. Labels: `self-hosted`, `Linux`, `X64`, `prod` |
 | App folder | `~/flood-payout` holds `docker-compose.yml`, `Caddyfile`, `.env` (`DOMAIN` and `IMAGE_TAG`) and `.last_good_tag` |
-| Login key | Key pair `flood-payout-key`. The private file is kept by one team member and never goes in the repository |
+| Login key | An SSH key pair. The private key file is kept by the project owner and never goes in the repository: ask the project owner (Han) for the address and the key file if you need them |
 
 ### Everyday commands
+
+For problems on the server (logs, restarts, rollback without GitHub, the runner, alerts), see [RUNBOOK.md](RUNBOOK.md).
 
 | Task | How |
 |---|---|
@@ -402,7 +405,7 @@ An update replaces the app container, so the site is unavailable for a few secon
 | Daily health check | `health` runs every day at 08:17 Bangkok time and emails on failure. Run it by hand from Actions, then `health`, then Run workflow. Disable it while the server is stopped on purpose |
 | Work that is not ready | Use a branch and a pull request. Pull requests run the checks but never deploy |
 | Go back to an older build | Run the `deploy` workflow with an older tag. The tags are listed on GitHub under the repository's Packages |
-| Read the logs | Log in with `ssh -i <key file> ubuntu@52.62.228.131`, then `cd ~/flood-payout && docker compose ps && docker compose logs --tail 100 app caddy` |
+| Read the logs | Log in with `ssh -i <key file> ubuntu@<server address>` (ask the project owner (Han) for the address and the key file if you need them), then `cd ~/flood-payout && docker compose ps && docker compose logs --tail 100 app caddy` |
 | Save credit between work sessions | EC2 console, Instance state, Stop (never Terminate, which deletes the server). The Elastic IP keeps the address. The containers are set to restart by themselves; this is not tested yet (section 11) |
 
 ### Cost
