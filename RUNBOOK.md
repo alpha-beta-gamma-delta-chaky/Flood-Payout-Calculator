@@ -46,6 +46,8 @@ To go back by hand to an older build:
 1. Find the tag. The `ci` run of the commit you want shows it in the `publish` log, and the tags are listed on GitHub under the repository's Packages. The tag is `sha-` plus the first 7 characters of the commit.
 2. GitHub, Actions, `deploy`, Run workflow, branch `main`, Tag `sha-xxxxxxx`.
 
+**Rollback drill** (to practise, or to show that the rollback works): run `deploy` by hand with an older tag and tick "Rollback drill". The older build starts and is tested, the run then reports a failure on purpose, and the last good build comes back. The run ends red; that is the expected result. The site is down for a few seconds twice.
+
 If GitHub Actions itself is down, roll back on the server (works for any build still stored on the server):
 
 ```
@@ -93,7 +95,7 @@ The server uses about $0.80 of credit per day while running; a stopped server st
 2. EC2 console, Instances, `flood-payout`, Instance state, **Stop** (never Terminate: that deletes the server and its disk).
 3. To start again: Instance state, Start. Wait about 2 minutes, then run the smoke test (section 1) and check that the runner is Idle. Enable the `health` workflow again.
 
-The containers are set to start again by themselves (`restart: unless-stopped`) and the runner is a system service. This was not yet tested after a real restart (README section 11), so check it the first time.
+The containers are set to start again by themselves (`restart: unless-stopped`) and the runner is a system service. A reboot was tested on 13 November 2026 and everything came back by itself (README section 11). Still run the smoke test after a start, because a longer stop was not tested.
 
 ## 8. SSH stopped working
 

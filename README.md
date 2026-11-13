@@ -354,9 +354,16 @@ These send real HTTP requests to the service in memory, so they cover what the w
 | `App.test.tsx` | Change inputs / Start over | Change inputs keeps the answers; Start over clears them. |
 | `App.test.tsx` | How it works | The How it works page opens from the home page. |
 
-### Not tested yet
+### Tested by hand on the server
 
-The Docker and Caddy setup has no automated test of its own. It was run by hand on 7 November 2026: the page loaded through Caddy and the example house matched. Since the first deploy, `scripts/smoke_test.py` checks the live service after every deploy, and the `publish` job runs it against the container before the image is pushed. Still to do: the rollback path in `scripts/deploy.sh` was checked only with a stand-in for Docker, not on the real server, and the server has not been rebooted to confirm that the app and the deploy runner come back by themselves.
+The Docker and Caddy setup has no automated test of its own. It was run by hand on 7 November 2026: the page loaded through Caddy and the example house matched. Since the first deploy, `scripts/smoke_test.py` checks the live service after every deploy and once a day, and the `publish` job runs it against the container before the image is pushed.
+
+Two failure drills were run on the real server on 13 November 2026:
+
+- **Rollback drill.** The `deploy` workflow was started by hand with an older build (`sha-95944ab`) and the "Rollback drill" switch on. The new container started and passed the smoke test, the switch then reported a failure on purpose, and `scripts/deploy.sh` went back to the last good build (`sha-e23e1f1`), which passed the smoke test again. The run ended red, as designed. The switch only exists on the manual run; automatic deploys never use it.
+- **Reboot drill.** The EC2 instance was rebooted from the console. Without any manual step the containers came back, the daily health check passed when run by hand, the deploy runner showed Idle, and a manual deploy succeeded afterwards.
+
+Still not tested: a real broken build reaching the server (the `publish` job is designed to stop one first), and stopping the instance for a longer time and starting it again.
 
 ## 12. Deploy to AWS
 
@@ -406,7 +413,7 @@ For problems on the server (logs, restarts, rollback without GitHub, the runner,
 | Work that is not ready | Use a branch and a pull request. Pull requests run the checks but never deploy |
 | Go back to an older build | Run the `deploy` workflow with an older tag. The tags are listed on GitHub under the repository's Packages |
 | Read the logs | Log in with `ssh -i <key file> ubuntu@<server address>` (ask the project owner (Han) for the address and the key file if you need them), then `cd ~/flood-payout && docker compose ps && docker compose logs --tail 100 app caddy` |
-| Save credit between work sessions | EC2 console, Instance state, Stop (never Terminate, which deletes the server). The Elastic IP keeps the address. The containers are set to restart by themselves; this is not tested yet (section 11) |
+| Save credit between work sessions | EC2 console, Instance state, Stop (never Terminate, which deletes the server). The Elastic IP keeps the address. The containers and the deploy runner come back by themselves (tested with a reboot on 13 November, section 11) |
 
 ### Cost
 
